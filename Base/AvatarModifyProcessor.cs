@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using UnityEngine;
 using VRC.SDKBase.Editor.BuildPipeline;
 
@@ -14,9 +15,14 @@ namespace aki_lua87.AvatarUtils
             foreach (var m in mods)
             {
                 m.Apply(avatar);
+                // Apply後もコンポーネントが残っている場合は削除する
+                // (DestroyOnUpload のように Apply 内で GameObject ごと消した場合は null になる)
+                if (m != null)
+                    Object.DestroyImmediate(m);
             }
 
             return true;
         }
     }
 }
+#endif

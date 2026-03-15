@@ -123,7 +123,7 @@ namespace aki_lua87.AvatarUtils.Editor
                 {
                     GUILayout.FlexibleSpace();
                     if (GUILayout.Button("FXから自動検出", GUILayout.Width(140)))
-                        AutoDetectClipsFromFX(comp, comp.FXController);
+                        AutoDetectClipsFromFX(comp, comp.FXController as AnimatorController);
                 }
             }
 

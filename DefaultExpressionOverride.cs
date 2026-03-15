@@ -1,9 +1,12 @@
 using System.Collections.Generic;
 using System.IO;
-using UnityEditor;
-using UnityEditor.Animations;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
+
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.Animations;
+#endif
 
 namespace aki_lua87.AvatarUtils
 {
@@ -17,12 +20,12 @@ namespace aki_lua87.AvatarUtils
     public class DefaultExpressionOverride : AvatarModify
     {
         [Header("元のFX AnimatorController")]
-        public AnimatorController FXController;
+        public RuntimeAnimatorController FXController;
 
         [Header("顔のSkinnedMeshRenderer")]
         public SkinnedMeshRenderer FaceMesh;
 
-        [Header("上書き対象のアニメーションクリップ (FX内で使われているもの)")]
+        [Header("上書き対象のアニメーションクリップ")]
         public AnimationClip[] TargetClips = new AnimationClip[0];
 
         private const string OutputRoot = "Assets/aki_lua87_AAU_Generated";
@@ -30,10 +33,13 @@ namespace aki_lua87.AvatarUtils
 
         private void Reset()
         {
+#if UNITY_EDITOR
             FXController = FindFXController();
-            FaceMesh     = FindBodyMesh();
+#endif
+            FaceMesh = FindBodyMesh();
         }
 
+#if UNITY_EDITOR
         private AnimatorController FindFXController()
         {
             var descriptor = GetComponent<VRCAvatarDescriptor>();
@@ -47,6 +53,7 @@ namespace aki_lua87.AvatarUtils
             }
             return null;
         }
+#endif
 
         private SkinnedMeshRenderer FindBodyMesh()
         {
@@ -57,6 +64,7 @@ namespace aki_lua87.AvatarUtils
 
         public override void Apply(GameObject avatarRoot)
         {
+#if UNITY_EDITOR
             if (!ValidateInputs()) return;
 
             var descriptor = avatarRoot.GetComponent<VRCAvatarDescriptor>();
@@ -73,15 +81,34 @@ namespace aki_lua87.AvatarUtils
             var clipMap = BuildClipReplacementMap(blendshapeValues, facePath);
             if (clipMap.Count == 0) return;
 
-            var generatedFX = CloneAndPatchController(FXController, clipMap);
+            var generatedFX = CloneAndPatchController(FXController as AnimatorController, clipMap);
             if (generatedFX == null) return;
 
             SetFXController(descriptor, generatedFX);
             EditorUtility.SetDirty(descriptor);
 
             Debug.Log($"[DefaultExpressionOverride] デフォルト表情を上書きしました。({clipMap.Count}クリップ)", this);
+#endif
         }
 
+        // ----------------------------------------------------------------
+        //  Utility (runtime-safe)
+        // ----------------------------------------------------------------
+
+        private static string GetRelativePath(Transform root, Transform target)
+        {
+            if (target == root) return string.Empty;
+            var parts = new List<string>();
+            var current = target;
+            while (current != null && current != root)
+            {
+                parts.Insert(0, current.name);
+                current = current.parent;
+            }
+            return string.Join("/", parts);
+        }
+
+#if UNITY_EDITOR
         // ----------------------------------------------------------------
         //  Validation
         // ----------------------------------------------------------------
@@ -303,21 +330,8 @@ namespace aki_lua87.AvatarUtils
         }
 
         // ----------------------------------------------------------------
-        //  Utility
+        //  Folder helpers
         // ----------------------------------------------------------------
-
-        private static string GetRelativePath(Transform root, Transform target)
-        {
-            if (target == root) return string.Empty;
-            var parts = new List<string>();
-            var current = target;
-            while (current != null && current != root)
-            {
-                parts.Insert(0, current.name);
-                current = current.parent;
-            }
-            return string.Join("/", parts);
-        }
 
         private static void EnsureOutputFolder()
         {
@@ -326,5 +340,6 @@ namespace aki_lua87.AvatarUtils
             if (!AssetDatabase.IsValidFolder(OutputDir))
                 AssetDatabase.CreateFolder(OutputRoot, "DefaultExpressionOverride");
         }
+#endif
     }
 }

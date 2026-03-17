@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
@@ -46,10 +46,14 @@ namespace aki_lua87.AvatarUtils
             if (descriptor == null) return null;
             foreach (var layer in descriptor.baseAnimationLayers)
             {
-                if (layer.type == VRCAvatarDescriptor.AnimLayerType.FX &&
-                    !layer.isDefault &&
-                    layer.animatorController != null)
-                    return layer.animatorController as AnimatorController;
+                if (layer.type != VRCAvatarDescriptor.AnimLayerType.FX) continue;
+                if (layer.isDefault || layer.animatorController == null) continue;
+                var ctrl = layer.animatorController as AnimatorController;
+                if (ctrl == null) continue;
+                // 生成物はスキップ (以前の実行でDescriptorが書き換わっていても正しい元を返す)
+                string path = AssetDatabase.GetAssetPath(ctrl);
+                if (path.StartsWith(OutputDir)) continue;
+                return ctrl;
             }
             return null;
         }
@@ -70,7 +74,7 @@ namespace aki_lua87.AvatarUtils
             var descriptor = avatarRoot.GetComponent<VRCAvatarDescriptor>();
             if (descriptor == null)
             {
-                Debug.LogWarning("[DefaultExpressionOverride] VRCAvatarDescriptor が見つかりません。", this);
+                Debug.LogWarning("[AAU] VRCAvatarDescriptor が見つかりません。", this);
                 return;
             }
 
@@ -87,7 +91,7 @@ namespace aki_lua87.AvatarUtils
             SetFXController(descriptor, generatedFX);
             EditorUtility.SetDirty(descriptor);
 
-            Debug.Log($"[DefaultExpressionOverride] デフォルト表情を上書きしました。({clipMap.Count}クリップ)", this);
+            Debug.Log($"[AAU] デフォルト表情を上書きしました。({clipMap.Count}クリップ)", this);
 #endif
         }
 
@@ -117,7 +121,19 @@ namespace aki_lua87.AvatarUtils
         {
             if (FXController == null)
             {
-                Debug.LogWarning("[DefaultExpressionOverride] FXController が未設定です。", this);
+                Debug.LogWarning("[AAU] FXController が未設定です。", this);
+                return false;
+            }
+
+            // 生成物を元として使ってしまうと、以前の壊れた状態が引き継がれる
+            string fxPath = AssetDatabase.GetAssetPath(FXController);
+            if (fxPath.StartsWith(OutputDir))
+            {
+                Debug.LogError(
+                    "[AAU] FXController に生成物が設定されています！\n" +
+                    "必ず元の (生成前の) FXコントローラーを設定してください。\n" +
+                    "インスペクターの「FX を自動検出してセット」を押して再設定するか、手動で正しいコントローラーを指定してください。",
+                    this);
                 return false;
             }
 
@@ -126,14 +142,14 @@ namespace aki_lua87.AvatarUtils
                 FaceMesh = FindBodyMesh();
                 if (FaceMesh == null)
                 {
-                    Debug.LogWarning("[DefaultExpressionOverride] FaceMesh が未設定です。", this);
+                    Debug.LogWarning("[AAU] FaceMesh が未設定です。", this);
                     return false;
                 }
             }
 
             if (TargetClips == null || TargetClips.Length == 0)
             {
-                Debug.LogWarning("[DefaultExpressionOverride] TargetClips が未設定です。", this);
+                Debug.LogWarning("[AAU] TargetClips が未設定です。", this);
                 return false;
             }
 
@@ -203,9 +219,28 @@ namespace aki_lua87.AvatarUtils
 
             if (modified == null) return null;
 
+            // 元クリップが既に持っているシェイプキー名を収集する
+            // (元クリップにないシェイプキーは追加しない = リップシンク等を破壊しない)
+            var existingShapeKeys = new HashSet<string>();
+            foreach (var binding in AnimationUtility.GetCurveBindings(modified))
+            {
+                if (binding.type == typeof(SkinnedMeshRenderer) &&
+                    binding.propertyName.StartsWith("blendShape."))
+                    existingShapeKeys.Add(binding.propertyName.Substring("blendShape.".Length));
+            }
+
+            if (existingShapeKeys.Count == 0)
+            {
+                Debug.LogWarning(
+                    $"[AAU] '{original.name}' にシェイプキーのカーブが存在しませんでした。" +
+                    "デフォルト表情として使われているクリップか確認してください。", this);
+            }
+
+            // 元クリップが制御しているシェイプキーのみ現在値で上書きする
             float clipLength = modified.length > 0f ? modified.length : 0f;
             foreach (var kvp in blendshapeValues)
             {
+                if (!existingShapeKeys.Contains(kvp.Key)) continue;
                 var curve = AnimationCurve.Constant(0f, clipLength, kvp.Value);
                 modified.SetCurve(facePath, typeof(SkinnedMeshRenderer), "blendShape." + kvp.Key, curve);
             }
@@ -231,7 +266,7 @@ namespace aki_lua87.AvatarUtils
 
             if (!AssetDatabase.CopyAsset(srcPath, destPath))
             {
-                Debug.LogError($"[DefaultExpressionOverride] コントローラーのコピーに失敗しました: {srcPath}", this);
+                Debug.LogError($"[AAU] コントローラーのコピーに失敗しました: {srcPath}", this);
                 return null;
             }
 
@@ -244,7 +279,7 @@ namespace aki_lua87.AvatarUtils
                 anyReplaced |= ReplaceClipsInStateMachine(layer.stateMachine, clipMap);
 
             if (!anyReplaced)
-                Debug.LogWarning("[DefaultExpressionOverride] 指定したクリップがFXコントローラー内に見つかりませんでした。TargetClipsを確認してください。", this);
+                Debug.LogWarning("[AAU] 指定したクリップがFXコントローラー内に見つかりませんでした。TargetClipsを確認してください。", this);
 
             EditorUtility.SetDirty(cloned);
             AssetDatabase.SaveAssets();
@@ -259,6 +294,12 @@ namespace aki_lua87.AvatarUtils
 
             foreach (var cs in sm.states)
             {
+                // デフォルトステートのみ置換する
+                // 同一クリップが表情/ジェスチャーステートでも使われている場合に
+                // 意図せず上書きしてしまうのを防ぐ
+                bool isDefaultState = sm.defaultState != null && cs.state == sm.defaultState;
+                if (!isDefaultState) continue;
+
                 var state = cs.state;
                 if (state.motion is AnimationClip clip)
                 {

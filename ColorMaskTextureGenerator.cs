@@ -1,5 +1,9 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
+
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace aki_lua87.AvatarUtils
 {
@@ -44,32 +48,49 @@ namespace aki_lua87.AvatarUtils
         {
             if (SourceTexture == null || TargetMaterial == null) return;
 
+            // マスクテクスチャを生成してマテリアルを複製（インメモリ、アセット保存不要）
             var mask = GenerateMaskTexture();
-
             var matClone = Object.Instantiate(TargetMaterial);
+            matClone.name = TargetMaterial.name + "_AAU_Override";
             matClone.SetTexture(TargetPropertyName, mask);
-
             if (ForceEnableTextureFeature)
                 TryForceEnableFeature(matClone);
 
-            // avatarRoot 以下の全 Renderer で TargetMaterial を参照しているスロットを置換
+#if UNITY_EDITOR
+            // アセットパスによる一致判定（NDMF クローン対策）
+            string targetAssetPath = AssetDatabase.GetAssetPath(TargetMaterial);
+#endif
+
+            int replacedCount = 0;
             foreach (var renderer in avatarRoot.GetComponentsInChildren<Renderer>(true))
             {
                 var mats = renderer.sharedMaterials;
                 bool changed = false;
                 for (int i = 0; i < mats.Length; i++)
                 {
-                    if (mats[i] == TargetMaterial)
+                    if (mats[i] == null) continue;
+
+                    bool isMatch = mats[i] == TargetMaterial;
+#if UNITY_EDITOR
+                    if (!isMatch && !string.IsNullOrEmpty(targetAssetPath))
+                        isMatch = AssetDatabase.GetAssetPath(mats[i]) == targetAssetPath;
+#endif
+                    if (isMatch)
                     {
                         mats[i] = matClone;
                         changed = true;
+                        replacedCount++;
                     }
                 }
                 if (changed) renderer.sharedMaterials = mats;
             }
+
+            if (replacedCount > 0)
+                Debug.Log($"[AAU] '{TargetMaterial.name}' の '{TargetPropertyName}' を {replacedCount} スロットで上書きしました。", this);
         }
 
         private void TryForceEnableFeature(Material mat) => ApplyForceEnableToMaterial(mat, TargetPropertyName);
+
 
         /// <summary>
         /// 指定テクスチャプロパティに対応する有効化トグルをマテリアルに設定する（エディターからも呼び出し可）。

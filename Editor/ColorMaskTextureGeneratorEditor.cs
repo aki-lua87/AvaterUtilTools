@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -598,7 +598,7 @@ namespace aki_lua87.AvatarUtils.Editor
 
             if (AnimationMode.InAnimationMode())
             {
-                Debug.LogWarning("[ColorMaskTextureGenerator] 別の AnimationMode が起動中のためプレビューを開始できません。");
+                Debug.LogWarning("[AAU] 別の AnimationMode が起動中のためプレビューを開始できません。");
                 return;
             }
 
